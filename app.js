@@ -3,6 +3,7 @@ const axios = require('axios');
 const bodyParser = require('body-parser');
 const mysql = require('mysql2');
 const bcrypt = require('bcrypt');
+const session = require('express-session');
 require('dotenv').config();
 
 const app = express();
@@ -38,6 +39,12 @@ connection.connect(error => {
 app.set('view engine', 'ejs');
 app.use(bodyParser.urlencoded({ extended: true }));
 
+app.use(session({
+  secret: 'your-secret-key',
+  resave: false,
+  saveUninitialized: true,
+}));
+
 app.get('/', (req, res) => {
   res.render('index');
 });
@@ -53,6 +60,10 @@ app.get('/signup', (req, res) => {
 app.post('/signup', async (req, res) => {
   const { firstName, lastName, username, email, password, phone } = req.body;
   
+  if (!email.endsWith('@eagles.oc.edu')) {
+    return res.status(400).send('Please enter valid OC email');
+  }
+  
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     const query = 'INSERT INTO users (firstName, lastName, username, email, hashed_password, phone) VALUES (?, ?, ?, ?, ?, ?)';
@@ -63,7 +74,7 @@ app.post('/signup', async (req, res) => {
         console.error('Error inserting user:', error);
         return res.status(500).send('Error inserting user');
       }
-      res.send('User signed up successfully');
+      res.redirect('/login');
     });
   } catch (error) {
     console.error('Error signing up:', error);
@@ -92,18 +103,27 @@ app.post('/login', async (req, res) => {
       return res.status(401).send('Invalid email or password');
     }
 
-    res.send('Login successful');
+    req.session.user = user; // Save the user information in the session
+    res.redirect('/resume');
   });
 });
 
+app.get('/resume', (req, res) => {
+  if (!req.session.user) {
+    return res.redirect('/login'); // Redirect to login if the user is not logged in
+  }
+  res.render('resume', { user: req.session.user });
+});
+
 app.post('/generate_resume', async (req, res) => {
-  const { firstName, lastName, email, phone, education, experience } = req.body;
+  const { education, experience, skills, linkedUrl } = req.body;
+  const { firstName, lastName, email, phone } = req.session.user;
 
   if (!firstName || !lastName || !email || !phone || !education || !experience) {
     return res.status(400).send('All fields are required');
   }
 
-  const prompt = `Generate concise bullet points for the following experience: ${experience}`;
+  const prompt = `Generate concise bullet points for the experience section based on ${experience} of experience, a ${education}, and skills in ${skills}.`;
 
   try {
     const response = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -125,13 +145,25 @@ app.post('/generate_resume', async (req, res) => {
       .map(point => point.trim().replace(/^- /, '').replace(/\.$/, '').trim() + '.')
       .filter(line => line.trim() !== '.');
 
-    res.render('resume', {
-      firstName,
-      lastName,
-      email,
-      phone,
-      education,
-      experience: experiencePoints
+    const user = req.session.user;
+
+    const insertResumeQuery = 'INSERT INTO resumes (user_id, firstName, lastName, email, phone, education, experience, skills, linkedUrl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+    const resumeValues = [user.id, firstName, lastName, email, phone, education, experiencePoints.join(' '), skills, linkedUrl];
+    connection.query(insertResumeQuery, resumeValues, (error, results) => {
+      if (error) {
+        console.error('Error saving resume:', error);
+        return res.status(500).send('Error saving resume');
+      }
+      res.render('generated_resume', {
+        firstName,
+        lastName,
+        email,
+        phone,
+        education,
+        experience: experiencePoints,
+        skills,
+        linkedUrl
+      });
     });
   } catch (error) {
     console.error('Error generating description:', error);
@@ -153,6 +185,125 @@ app.get('/user-count', (req, res) => {
   });
 });
 
+app.get('/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).send('Failed to logout');
+    }
+    res.redirect('/');
+  });
+});
+
+app.get('/user/:email/education', (req, res) => {
+  const email = req.params.email;
+  const query = 'SELECT education FROM resumes WHERE email = ?';
+  
+  connection.query(query, [email], (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+    
+    if (results.length === 0) {
+      return res.status(404).send('No education found for the given email');
+    }
+    
+    res.json({ education: results[0].education });
+  });
+});
+
+app.get('/user/:email/experience', (req, res) => {
+  const email = req.params.email;
+  const query = 'SELECT experience FROM resumes WHERE email = ?';
+  
+  connection.query(query, [email], (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+    
+    if (results.length === 0) {
+      return res.status(404).send('No experience found for the given email');
+    }
+    
+    res.json({ experience: results[0].experience });
+  });
+});
+
+app.get('/user/:email/skills', (req, res) => {
+  const email = req.params.email;
+  const query = 'SELECT skills FROM resumes WHERE email = ?';
+  
+  connection.query(query, [email], (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+    
+    if (results.length === 0) {
+      return res.status(404).send('No skills found for the given email');
+    }
+    
+    res.json({ skills: results[0].skills });
+  });
+});
+
+app.get('/user/:email/phone', (req, res) => {
+  const email = req.params.email;
+  const query = 'SELECT phone FROM resumes WHERE email = ?';
+  
+  connection.query(query, [email], (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+    
+    if (results.length === 0) {
+      return res.status(404).send('No phone found for the given email');
+    }
+    
+    res.json({ phone: results[0].phone });
+  });
+});
+
+app.get('/user/:email/linkedin', (req, res) => {
+  const email = req.params.email;
+  const query = 'SELECT linkedUrl FROM resumes WHERE email = ?';
+  
+  connection.query(query, [email], (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+    
+    if (results.length === 0) {
+      return res.status(404).send('No LinkedIn URL found for the given email');
+    }
+    
+    res.json({ linkedUrl: results[0].linkedUrl });
+  });
+});
+
+app.get('/resume/:email', (req, res) => {
+  const email = req.params.email;
+  const query = 'SELECT * FROM resumes WHERE email = ?';
+
+  connection.query(query, [email], (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+
+    if (results.length === 0) {
+      return res.status(404).send('No resume found for the given email');
+    }
+
+    res.json(results[0]);
+  });
+});
+
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
 });
+
+
