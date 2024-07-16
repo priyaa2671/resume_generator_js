@@ -251,6 +251,8 @@ router.post('/generate_resume', async (req, res) => {
     }
 });
 
+  
+
 router.get('/user-count', (req, res) => {
   const query = 'SELECT COUNT(*) AS count FROM users';
 
@@ -364,7 +366,7 @@ router.get('/user/:email/experience', (req, res) => {
       res.json({ linkedUrl: results[0].linkedUrl });
     });
   });
-
+  
   router.get('/resume/:email', (req, res) => {
     const email = req.params.email;
     const query = 'SELECT * FROM resumes WHERE email = ?';
@@ -563,8 +565,8 @@ router.get('/user/:email/experience', (req, res) => {
       res.json({ start_date: results[0].start_date });
     });
   });
-
-router.get('/user/:email/experience/end_date', (req, res) => {
+  
+  router.get('/user/:email/experience/end_date', (req, res) => {
     const email = req.params.email;
     const query = 'SELECT DATE_FORMAT(end_date, "%Y-%m-%d") AS end_date FROM Experience e JOIN users u ON e.user_id = u.id WHERE u.email = ?';
   
@@ -739,7 +741,6 @@ router.put('/user/:email/experience/:id', (req, res) => {
       res.json(results);
     });
   });
-
   
   router.get('/user/:email/proficiency_level/:skill_name', (req, res) => {
     const email = req.params.email;
@@ -759,8 +760,7 @@ router.put('/user/:email/experience/:id', (req, res) => {
       res.json({ proficiency_level: results[0].proficiency_level });
     });
   });
-
-
+  
   // Routes for fetching certificates
 router.get('/user/:email/certificates', (req, res) => {
     const email = req.params.email;
@@ -779,7 +779,6 @@ router.get('/user/:email/certificates', (req, res) => {
       res.json(results);
     });
   });
-
 
   module.exports = router;
   
