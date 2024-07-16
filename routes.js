@@ -564,3 +564,219 @@ router.get('/user/:email/experience', (req, res) => {
     });
   });
 
+router.get('/user/:email/experience/end_date', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT DATE_FORMAT(end_date, "%Y-%m-%d") AS end_date FROM Experience e JOIN users u ON e.user_id = u.id WHERE u.email = ?';
+  
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No end date found for the given email');
+      }
+  
+      res.json({ end_date: results[0].end_date });
+    });
+  });
+
+  // DELETE /user/:email/experience/:id
+router.delete('/user/:email/experience/:id', (req, res) => {
+    const email = req.params.email;
+    const experience_id = req.params.id;
+
+    const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+    connection.query(getUserIdQuery, [email], (error, results) => {
+        if (error) {
+            console.error('Error querying the database:', error);
+            return res.status(500).send('Error querying the database');
+        }
+
+        if (results.length === 0) {
+            return res.status(404).send('User not found');
+        }
+
+        const user_id = results[0].id;
+        const deleteExperienceQuery = 'DELETE FROM Experience WHERE user_id = ? AND id = ?';
+
+        connection.query(deleteExperienceQuery, [user_id, experience_id], (error, results) => {
+            if (error) {
+                console.error('Error deleting experience:', error);
+                return res.status(500).send('Error deleting experience');
+            }
+            res.status(200).send('Experience deleted successfully');
+        });
+    });
+});
+
+// POST /user/:email/experience
+router.post('/user/:email/experience', (req, res) => {
+    const email = req.params.email;
+    const { company_name, role, start_date, end_date, description } = req.body;
+
+    console.log('Received data:', { company_name, role, start_date, end_date, description });
+
+    if (!company_name || !role || !start_date || !end_date || !description) {
+        return res.status(400).send('All fields are required');
+    }
+
+    const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+    connection.query(getUserIdQuery, [email], (error, results) => {
+        if (error) {
+            console.error('Error querying the database:', error);
+            return res.status(500).send('Error querying the database');
+        }
+
+        if (results.length === 0) {
+            return res.status(404).send('User not found');
+        }
+
+        const user_id = results[0].id;
+        const insertExperienceQuery = 'INSERT INTO Experience (user_id, company_name, role, start_date, end_date, description, email) VALUES (?, ?, ?, ?, ?, ?, ?)';
+        const values = [user_id, company_name, role, start_date, end_date, description, email];
+
+        connection.query(insertExperienceQuery, values, (error, results) => {
+            if (error) {
+                console.error('Error inserting experience:', error);
+                return res.status(500).send('Error inserting experience');
+            }
+            console.log('Experience added successfully:', results);
+            res.status(201).send('Experience added successfully');
+        });
+    });
+});
+
+// PUT /user/:email/experience/:id
+router.put('/user/:email/experience/:id', (req, res) => {
+    const email = req.params.email;
+    const experience_id = req.params.id;
+    const { company_name, role, start_date, end_date, description } = req.body;
+
+    console.log('Received data:', { company_name, role, start_date, end_date, description });
+
+    if (!company_name || !role || !start_date || !end_date || !description) {
+        return res.status(400).send('All fields are required');
+    }
+
+    const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+    connection.query(getUserIdQuery, [email], (error, results) => {
+        if (error) {
+            console.error('Error querying the database:', error);
+            return res.status(500).send('Error querying the database');
+        }
+
+        if (results.length === 0) {
+            return res.status(404).send('User not found');
+        }
+
+        const user_id = results[0].id;
+        const updateExperienceQuery = 'UPDATE Experience SET company_name = ?, role = ?, start_date = ?, end_date = ?, description = ? WHERE user_id = ? AND id = ?';
+        const values = [company_name, role, start_date, end_date, description, user_id, experience_id];
+
+        connection.query(updateExperienceQuery, values, (error, results) => {
+            if (error) {
+                console.error('Error updating experience:', error);
+                return res.status(500).send('Error updating experience');
+            }
+            res.status(200).send('Experience updated successfully');
+        });
+    });
+});
+
+
+  router.get('/user/:email/login_time', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT DATE_FORMAT(s.login_time, "%Y-%m-%d %H:%i:%s") AS login_time FROM Sessions s JOIN users u ON s.user_id = u.id WHERE u.email = ? ORDER BY s.login_time DESC LIMIT 1';
+  
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No login time found for the given email');
+      }
+  
+      res.json({ login_time: results[0].login_time });
+    });
+  });
+  
+  router.get('/user/:email/logout_time', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT DATE_FORMAT(s.logout_time, "%Y-%m-%d %H:%i:%s") AS logout_time FROM Sessions s JOIN users u ON s.user_id = u.id WHERE u.email = ? ORDER BY s.logout_time DESC LIMIT 1';
+  
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No logout time found for the given email');
+      }
+  
+      res.json({ logout_time: results[0].logout_time });
+    });
+  });
+
+  router.get('/user/:email/skills', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT skill_name, proficiency_level FROM Skills s JOIN users u ON s.user_id = u.id WHERE u.email = ?';
+  
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No skills found for the given email');
+      }
+  
+      res.json(results);
+    });
+  });
+  
+  router.get('/user/:email/proficiency_level/:skill_name', (req, res) => {
+    const email = req.params.email;
+    const skill_name = req.params.skill_name;
+    const query = 'SELECT proficiency_level FROM Skills s JOIN users u ON s.user_id = u.id WHERE u.email = ? AND s.skill_name = ?';
+  
+    connection.query(query, [email, skill_name], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No proficiency level found for the given skill and email');
+      }
+  
+      res.json({ proficiency_level: results[0].proficiency_level });
+    });
+  });
+  
+  // Routes for fetching certificates
+router.get('/user/:email/certificates', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT certificate_name, issuing_organization, DATE_FORMAT(issue_date, "%Y-%m-%d") AS issue_date, DATE_FORMAT(expiration_date, "%Y-%m-%d") AS expiration_date FROM Certificates c JOIN users u ON c.user_id = u.id WHERE u.email = ?';
+  
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No certificates found for the given email');
+      }
+  
+      res.json(results);
+    });
+  });
+
+  module.exports = router;
+  
