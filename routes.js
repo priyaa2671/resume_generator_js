@@ -739,6 +739,7 @@ router.put('/user/:email/experience/:id', (req, res) => {
       res.json(results);
     });
   });
+
   
   router.get('/user/:email/proficiency_level/:skill_name', (req, res) => {
     const email = req.params.email;
@@ -758,7 +759,8 @@ router.put('/user/:email/experience/:id', (req, res) => {
       res.json({ proficiency_level: results[0].proficiency_level });
     });
   });
-  
+
+
   // Routes for fetching certificates
 router.get('/user/:email/certificates', (req, res) => {
     const email = req.params.email;
@@ -777,6 +779,7 @@ router.get('/user/:email/certificates', (req, res) => {
       res.json(results);
     });
   });
+
 
   module.exports = router;
   
