@@ -250,3 +250,118 @@ router.post('/generate_resume', async (req, res) => {
         res.status(500).send('Error generating description');
     }
 });
+
+router.get('/user-count', (req, res) => {
+  const query = 'SELECT COUNT(*) AS count FROM users';
+
+  connection.query(query, (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+
+    const count = results[0].count;
+    res.json({ userCount: count });
+  });
+});
+
+router.get('/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).send('Failed to logout');
+    }
+    res.redirect('/');
+  });
+});
+
+router.get('/user/:email/education', (req, res) => {
+  const email = req.params.email;
+  const query = 'SELECT degree, institution, start_date, end_date FROM Education e JOIN users u ON e.user_id = u.id WHERE u.email = ?';
+
+  connection.query(query, [email], (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+
+    if (results.length === 0) {
+      return res.status(404).send('No education found for the given email');
+    }
+
+    res.json(results[0]);
+  });
+});
+
+router.get('/user/:email/experience', (req, res) => {
+  const email = req.params.email;
+  const query = 'SELECT company_name, role, start_date, end_date, description FROM Experience e JOIN users u ON e.user_id = u.id WHERE u.email = ?';
+
+  connection.query(query, [email], (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+
+    if (results.length === 0) {
+      return res.status(404).send('No experience found for the given email');
+    }
+
+    res.json(results[0]);
+  });
+});
+
+  // New routes to fetch skill_name and proficiency_level
+  router.get('/user/:email/skills', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT skill_name, proficiency_level FROM Skills s JOIN users u ON s.user_id = u.id WHERE u.email = ?';
+  
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No skills found for the given email');
+      }
+  
+      res.json(results);
+    });
+  });
+  
+  router.get('/user/:email/phone', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT phone FROM resumes WHERE email = ?';
+  
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No phone found for the given email');
+      }
+  
+      res.json({ phone: results[0].phone });
+    });
+  });
+  
+  router.get('/user/:email/linkedin', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT linkedUrl FROM resumes WHERE email = ?';
+  
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No LinkedIn URL found for the given email');
+      }
+  
+      res.json({ linkedUrl: results[0].linkedUrl });
+    });
+  });
+
