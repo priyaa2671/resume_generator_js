@@ -3,6 +3,11 @@ const router = express.Router();
 const axios = require('axios');
 const mysql = require('mysql2');
 const bcrypt = require('bcrypt');
+const AWS = require('aws-sdk');
+const ejs = require('ejs');
+const path = require('path');
+const puppeteer = require('puppeteer');
+
 const dbConfig = {
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -11,6 +16,7 @@ const dbConfig = {
 };
 
 const connection = mysql.createConnection(dbConfig);
+const s3 = new AWS.S3();
 
 router.get('/', (req, res) => {
   res.render('index');
@@ -50,67 +56,179 @@ router.post('/signup', async (req, res) => {
 });
 
 router.post('/login', async (req, res) => {
-    const { email, password } = req.body;
-  
-    const query = 'SELECT * FROM users WHERE email = ?';
-    connection.query(query, [email], async (error, results) => {
-      if (error) {
-        console.error('Error querying the database:', error);
-        return res.status(500).send('Error querying the database');
+  const { email, password } = req.body;
+
+  const query = 'SELECT * FROM users WHERE email = ?';
+  connection.query(query, [email], async (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+
+    if (results.length === 0) {
+      return res.status(401).send('Invalid email or password');
+    }
+
+    const user = results[0];
+    const passwordMatch = await bcrypt.compare(password, user.hashed_password);
+
+    if (!passwordMatch) {
+      return res.status(401).send('Invalid email or password');
+    }
+
+    req.session.user = user; // Save the user information in the session
+
+    // Insert login time into Sessions table
+    const loginTime = new Date();
+    const insertSessionQuery = 'INSERT INTO Sessions (user_id, email, login_time) VALUES (?, ?, ?)';
+    connection.query(insertSessionQuery, [user.id, email, loginTime], (sessionError) => {
+      if (sessionError) {
+        console.error('Error inserting session:', sessionError);
+        return res.status(500).send('Error inserting session');
       }
-  
-      if (results.length === 0) {
-        return res.status(401).send('Invalid email or password');
+
+      if (user.is_admin) {
+        return res.redirect('/admin_dashboard'); // Redirect to admin dashboard if the user is an admin
+      } else {
+        // Check if resume exists
+        const checkResumeQuery = 'SELECT s3_url FROM resumes WHERE user_id = ? ORDER BY created_at DESC LIMIT 1';
+        connection.query(checkResumeQuery, [user.id], (resumeError, resumeResults) => {
+          if (resumeError) {
+            console.error('Error checking for resume:', resumeError);
+            return res.status(500).send('Error checking for resume');
+          }
+
+          if (resumeResults.length > 0 && resumeResults[0].s3_url) {
+            // Resume exists, redirect to show the resume
+            return res.redirect('/show_resume');
+          } else {
+            // No resume found, redirect to resume creation page
+            return res.redirect('/resume');
+          }
+        });
       }
-  
-      const user = results[0];
-      const passwordMatch = await bcrypt.compare(password, user.hashed_password);
-  
-      if (!passwordMatch) {
-        return res.status(401).send('Invalid email or password');
-      }
-  
-      req.session.user = user; // Save the user information in the session
-  
-      // Insert login time into Sessions table
-      const loginTime = new Date();
-      const insertSessionQuery = 'INSERT INTO Sessions (user_id, email, login_time) VALUES (?, ?, ?)';
-      connection.query(insertSessionQuery, [user.id, email, loginTime], (sessionError) => {
-        if (sessionError) {
-          console.error('Error inserting session:', sessionError);
-          return res.status(500).send('Error inserting session');
-        }
-        res.redirect('/resume');
-      });
     });
   });
+});
 
-  router.get('/logout', (req, res) => {
-    if (req.session.user) {
-      const user = req.session.user;
-      const logoutTime = new Date();
-      console.log(`Updating logout time for user: ${user.id}, email: ${user.email}, logoutTime: ${logoutTime}`);
-  
-      const updateLogoutQuery = 'UPDATE Sessions SET logout_time = ? WHERE user_id = ? AND email = ? AND logout_time IS NULL';
-      connection.query(updateLogoutQuery, [logoutTime, user.id, user.email], (error, results) => {
-        if (error) {
-          console.error('Error updating session:', error);
-          return res.status(500).send('Error updating session');
-        }
-        console.log('Logout time updated successfully');
-  
-        req.session.destroy((err) => {
-          if (err) {
-            return res.status(500).send('Failed to logout');
-          }
-          res.redirect('/');
-        });
-      });
-    } else {
-      res.redirect('/');
+router.get('/show_resume', (req, res) => {
+  if (!req.session.user) {
+    return res.redirect('/login'); // Redirect to login if the user is not logged in
+  }
+
+  const userId = req.session.user.id;
+
+  const query = `
+    SELECT resumes.s3_url, comments.comment, comments.created_at
+    FROM resumes
+    LEFT JOIN comments ON resumes.id = comments.resume_id
+    WHERE resumes.user_id = ?
+    ORDER BY resumes.created_at DESC, comments.created_at ASC
+    LIMIT 1
+  `;
+  connection.query(query, [userId], (error, results) => {
+    if (error) {
+      console.error('Error fetching resume and comments:', error);
+      return res.status(500).send('Error fetching resume and comments');
     }
+
+    if (results.length === 0) {
+      return res.status(404).send('No resume found');
+    }
+
+    const resumeData = results[0];
+    const comments = results.map(row => ({ comment: row.comment, created_at: row.created_at })).filter(row => row.comment);
+
+    res.render('show_resume', { pdfUrl: resumeData.s3_url, comments });
   });
-  
+});
+
+
+router.get('/admin_dashboard', (req, res) => {
+  if (!req.session.user || !req.session.user.is_admin) {
+    return res.status(403).send('Access denied'); // Only allow access if the user is an admin
+  }
+
+  const query = `
+    SELECT users.firstName, users.lastName, resumes.id, resumes.s3_url, comments.comment, comments.created_at
+    FROM resumes
+    JOIN users ON resumes.user_id = users.id
+    LEFT JOIN comments ON resumes.id = comments.resume_id
+    ORDER BY resumes.created_at DESC
+  `;
+  connection.query(query, (error, results) => {
+    if (error) {
+      console.error('Error fetching all resumes:', error);
+      return res.status(500).send('Error fetching all resumes');
+    }
+
+    const resumes = results.reduce((acc, row) => {
+      const resume = acc.find(r => r.id === row.id);
+      if (resume) {
+        resume.comments.push({ comment: row.comment, created_at: row.created_at });
+      } else {
+        acc.push({
+          id: row.id,
+          firstName: row.firstName,
+          lastName: row.lastName,
+          s3_url: row.s3_url,
+          comments: row.comment ? [{ comment: row.comment, created_at: row.created_at }] : []
+        });
+      }
+      return acc;
+    }, []);
+
+    res.render('admin_dashboard', { resumes });
+  });
+});
+
+
+router.post('/add_comment', (req, res) => {
+  if (!req.session.user || !req.session.user.is_admin) {
+    return res.status(403).send('Access denied');
+  }
+
+  const { resume_id, comment } = req.body;
+  const admin_id = req.session.user.id;
+
+  const query = 'INSERT INTO comments (resume_id, admin_id, comment) VALUES (?, ?, ?)';
+  connection.query(query, [resume_id, admin_id, comment], (error, results) => {
+    if (error) {
+      console.error('Error adding comment:', error);
+      return res.status(500).send('Error adding comment');
+    }
+
+    res.redirect('/admin_dashboard');
+  });
+});
+
+
+
+router.get('/logout', (req, res) => {
+  if (req.session.user) {
+    const user = req.session.user;
+    const logoutTime = new Date();
+    console.log(`Updating logout time for user: ${user.id}, email: ${user.email}, logoutTime: ${logoutTime}`);
+
+    const updateLogoutQuery = 'UPDATE Sessions SET logout_time = ? WHERE user_id = ? AND email = ? AND logout_time IS NULL';
+    connection.query(updateLogoutQuery, [logoutTime, user.id, user.email], (error, results) => {
+      if (error) {
+        console.error('Error updating session:', error);
+        return res.status(500).send('Error updating session');
+      }
+      console.log('Logout time updated successfully');
+
+      req.session.destroy((err) => {
+        if (err) {
+          return res.status(500).send('Failed to logout');
+        }
+        res.redirect('/');
+      });
+    });
+  } else {
+    res.redirect('/');
+  }
+});
 
 router.get('/resume', (req, res) => {
   if (!req.session.user) {
@@ -119,138 +237,323 @@ router.get('/resume', (req, res) => {
   res.render('resume', { user: req.session.user });
 });
 
-// Add this code snippet where appropriate in the existing routes.js file
-
-// Function to handle splitting skills and proficiency levels
-// Function to handle splitting skills and proficiency levels
+// Function to handle splitting skills
 function parseSkills(skills) {
-    return skills.split(',').map(skill => {
-      const [skill_name, proficiency_level] = skill.split(':').map(s => s.trim());
-      return { skill_name, proficiency_level };
-    });
-  }
-
-  // Function to handle splitting certificates
-function parseCertificates(certificateNames, issuingOrganizations, issueDates, expirationDates) {
-    const certificates = [];
-    for (let i = 0; i < certificateNames.length; i++) {
-      certificates.push({
-        certificate_name: certificateNames[i],
-        issuing_organization: issuingOrganizations[i],
-        issue_date: issueDates[i],
-        expiration_date: expirationDates[i]
-      });
-    }
-    return certificates;
+  return skills.split(',').map(skill => {
+    const [skill_name, proficiency_level] = skill.split(':').map(s => s.trim());
+    return { skill_name, proficiency_level };
+  });
 }
 
-// Modify the /generate_resume route
+// Function to handle splitting certificates
+function parseCertificates(certificateNames, issuingOrganizations, issueDates, expirationDates) {
+  const certificates = [];
+  for (let i = 0; i < certificateNames.length; i++) {
+    certificates.push({
+      certificate_name: certificateNames[i],
+      issuing_organization: issuingOrganizations[i],
+      issue_date: issueDates[i],
+      expiration_date: expirationDates[i]
+    });
+  }
+  return certificates;
+}
+
+// Function to handle splitting education
+function parseEducation(degrees, institutions, startDates, endDates) {
+  const education = [];
+  for (let i = 0; i < degrees.length; i++) {
+    education.push({
+      degree: degrees[i],
+      institution: institutions[i],
+      start_date: startDates[i],
+      end_date: endDates[i]
+    });
+  }
+  return education;
+}
+
+// Function to handle splitting experience
+function parseExperience(companyNames, roles, startDates, endDates, descriptions) {
+  const experience = [];
+  for (let i = 0; i < companyNames.length; i++) {
+    experience.push({
+      company_name: companyNames[i],
+      role: roles[i],
+      start_date: startDates[i],
+      end_date: endDates[i],
+      description: descriptions[i]
+    });
+  }
+  return experience;
+}
+
+function parseProjects(projectNames, githubLinks) {
+  const projects = [];
+  for (let i = 0; i < projectNames.length; i++) {
+    projects.push({
+      project_name: projectNames[i],
+      github_link: githubLinks[i]
+    });
+  }
+  return projects;
+}
+
+
+// Function to generate experience points for each experience
+const generateExperiencePoints = async (exp, jobDescription, skills) => {
+  const prompt = `Generate concise bullet points for the experience section based on experience at ${exp.company_name} as a ${exp.role} from ${exp.start_date} to ${exp.end_date}, and skills in ${skills}. Ensure the points align with the following job description: ${jobDescription}.`;
+
+  const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+    model: 'gpt-4',
+    messages: [
+      { role: 'system', content: 'You are a helpful assistant.' },
+      { role: 'user', content: prompt }
+    ]
+  }, {
+    headers: {
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const experienceDescription = response.data.choices[0].message.content.trim();
+  const experiencePoints = experienceDescription
+    .split('\n')
+    .map(point => point.trim().replace(/^- /, '').replace(/\.$/, '').trim() + '.')
+    .filter(line => line.trim() !== '.');
+
+  return experiencePoints; // Return the array of points
+};
+
+// Route to generate and save resume
 router.post('/generate_resume', async (req, res) => {
-    const { degree, institution, startDate, endDate, company_name, role, experience_start_date, experience_end_date, description, skills, linkedUrl, jobDescription, certificate_name, issuing_organization, issue_date, expiration_date } = req.body;
-    const { firstName, lastName, email, phone } = req.session.user;
+  const {
+    degree, institution, startDate, endDate, company_name, role, experience_start_date,
+    experience_end_date, description, skills, linkedUrl, jobDescription,
+    certificate_name, issuing_organization, issue_date, expiration_date, project_name, github_link
+  } = req.body;
+  const { firstName, lastName, email, phone } = req.session.user;
 
-    if (!firstName || !lastName || !email || !phone || !degree || !institution || !startDate || !endDate || !company_name || !role || !experience_start_date || !experience_end_date || !skills || !jobDescription) {
-        return res.status(400).send('All fields are required');
-    }
+  if (!firstName || !lastName || !email || !phone || !degree || !institution || !startDate || !endDate || !company_name || !role || !experience_start_date || !experience_end_date || !skills || !jobDescription) {
+    return res.status(400).send('All fields are required');
+  }
 
-    const prompt = `Generate concise bullet points for the experience section based on experience at ${company_name} as a ${role} from ${experience_start_date} to ${experience_end_date}, a ${degree} from ${institution}, and skills in ${skills}. Ensure the points align with the following job description: ${jobDescription}.`;
+  const user = req.session.user;
 
-    try {
-        const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: 'gpt-4',
-            messages: [
-                { role: 'system', content: 'You are a helpful assistant.' },
-                { role: 'user', content: prompt }
-            ]
-        }, {
-            headers: {
-                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                'Content-Type': 'application/json'
+  // Parsing Education, Experience, Skills, Certificates, and Projects
+  const parsedEducation = parseEducation(degree, institution, startDate, endDate);
+  const parsedExperience = parseExperience(company_name, role, experience_start_date, experience_end_date, description);
+  const parsedSkills = parseSkills(skills);
+  const parsedCertificates = parseCertificates(certificate_name, issuing_organization, issue_date, expiration_date);
+  const parsedProjects = parseProjects(project_name, github_link);
+
+  try {
+    // Generate experience points for each experience entry
+    const experiencePointsArray = await Promise.all(parsedExperience.map(exp => generateExperiencePoints(exp, jobDescription, skills)));
+
+    // Add generated experience points to each experience entry
+    parsedExperience.forEach((exp, index) => {
+      exp.description = experiencePointsArray[index].join('; '); // Ensure it's a string
+    });
+
+    // Inserting Education
+    const insertEducationQuery = 'INSERT INTO Education (user_id, degree, institution, start_date, end_date, email) VALUES ?';
+    const educationValues = parsedEducation.map(edu => [user.id, edu.degree, edu.institution, edu.start_date, edu.end_date, email]);
+    connection.query(insertEducationQuery, [educationValues], (error, results) => {
+      if (error) {
+        console.error('Error saving education:', error);
+        return res.status(500).send('Error saving education');
+      }
+    });
+
+    // Inserting Experience
+    const insertExperienceQuery = 'INSERT INTO Experience (user_id, company_name, role, start_date, end_date, description, email) VALUES ?';
+    const experienceValues = parsedExperience.map(exp => [user.id, exp.company_name, exp.role, exp.start_date, exp.end_date, exp.description, email]);
+    connection.query(insertExperienceQuery, [experienceValues], (error, results) => {
+      if (error) {
+        console.error('Error saving experience:', error);
+        return res.status(500).send('Error saving experience');
+      }
+    });
+
+    // Inserting Skills
+    const insertSkillsQuery = 'INSERT INTO Skills (user_id, email, skill_name, proficiency_level) VALUES ?';
+    const skillValues = parsedSkills.map(skill => [user.id, email, skill.skill_name, skill.proficiency_level]);
+    connection.query(insertSkillsQuery, [skillValues], (error, results) => {
+      if (error) {
+        console.error('Error saving skill:', error);
+        return res.status(500).send('Error saving skill');
+      }
+    });
+
+    // Inserting Certificates
+    const insertCertificatesQuery = 'INSERT INTO Certificates (user_id, certificate_name, issuing_organization, issue_date, expiration_date, email) VALUES ?';
+    const certificateValues = parsedCertificates.map(cert => [user.id, cert.certificate_name, cert.issuing_organization, cert.issue_date, cert.expiration_date, email]);
+    connection.query(insertCertificatesQuery, [certificateValues], (error, results) => {
+      if (error) {
+        console.error('Error saving certificate:', error);
+        return res.status(500).send('Error saving certificate');
+      }
+    });
+
+    // Inserting Projects
+    const insertProjectsQuery = 'INSERT INTO Projects (user_id, project_name, github_link) VALUES ?';
+    const projectValues = parsedProjects.map(project => [user.id, project.project_name, project.github_link]);
+    connection.query(insertProjectsQuery, [projectValues], (error, results) => {
+      if (error) {
+        console.error('Error saving projects:', error);
+        return res.status(500).send('Error saving projects');
+      }
+    });
+
+    // Create combined descriptions for education and experience
+    const educationDescription = parsedEducation.map(edu => `${edu.degree} from ${edu.institution} (${edu.start_date} to ${edu.end_date})`).join('; ');
+    const experienceDescriptionCombined = parsedExperience.map(exp => `${exp.role} at ${exp.company_name} (${exp.start_date} to ${exp.end_date}): ${exp.description}`).join('; ');
+
+    // Inserting into resumes table
+    const insertResumeQuery = 'INSERT INTO resumes (user_id, firstName, lastName, email, phone, education, experience, skills, linkedUrl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+    const resumeValues = [user.id, firstName, lastName, email, phone, educationDescription, experienceDescriptionCombined, skills, linkedUrl];
+    connection.query(insertResumeQuery, resumeValues, (error, results) => {
+      if (error) {
+        console.error('Error saving resume:', error);
+        return res.status(500).send('Error saving resume');
+      }
+
+      const resumeId = results.insertId;
+
+      // Render the resume to HTML for the web view
+      ejs.renderFile(path.join(__dirname, 'views', 'generated_resume.ejs'), {
+        firstName,
+        lastName,
+        email,
+        phone,
+        education: parsedEducation,
+        experience: parsedExperience.map(exp => ({
+          ...exp,
+          description: typeof exp.description === 'string' ? exp.description.split('; ').map(point => point.trim() + '.').filter(point => point.length > 1) : exp.description
+        })),
+        skills: parsedSkills,
+        linkedUrl,
+        certificates: parsedCertificates,
+        projects: parsedProjects, // Include projects
+        pdf: false,  // Indicate that this is for web rendering
+        downloadUrl: ''  // Provide an empty default value for web rendering
+      }, async (err, html) => {
+        if (err) {
+          console.error('Error rendering resume HTML:', err);
+          return res.status(500).send('Error rendering resume HTML');
+        }
+
+        try {
+          // Render the resume to HTML for PDF generation
+          const pdfHtml = await ejs.renderFile(path.join(__dirname, 'views', 'generated_resume.ejs'), {
+            firstName,
+            lastName,
+            email,
+            phone,
+            education: parsedEducation,
+            experience: parsedExperience.map(exp => ({
+              ...exp,
+              description: typeof exp.description === 'string' ? exp.description.split('; ').map(point => point.trim() + '.').filter(point => point.length > 1) : exp.description
+            })),
+            skills: parsedSkills,
+            linkedUrl,
+            certificates: parsedCertificates,
+            projects: parsedProjects, // Include projects
+            pdf: true  // Indicate that this is for PDF generation
+          });
+
+          // Generate PDF from HTML
+          const browser = await puppeteer.launch({
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+          });
+          const page = await browser.newPage();
+          await page.setContent(pdfHtml, { waitUntil: 'networkidle0' });
+
+          // Add stylesheets to the page
+          await page.addStyleTag({ path: path.join(__dirname, 'public', 'styles.css') });
+          await page.addStyleTag({ path: path.join(__dirname, 'public', 'resume_styles.css') });
+
+          const pdfBuffer = await page.pdf({ format: 'A4' });
+          await browser.close();
+
+          // Upload PDF to S3
+          const s3Params = {
+            Bucket: 'resume-generator-ocu',
+            Key: `resumes/${user.id}-${Date.now()}.pdf`,
+            Body: pdfBuffer,
+            ContentType: 'application/pdf'
+          };
+
+          s3.upload(s3Params, (s3Err, data) => {
+            if (s3Err) {
+              console.error('Error uploading PDF to S3:', s3Err);
+              return res.status(500).send('Error uploading PDF to S3');
             }
-        });
 
-        const experienceDescription = response.data.choices[0].message.content.trim();
-        const experiencePoints = experienceDescription
-            .split('\n')
-            .map(point => point.trim().replace(/^- /, '').replace(/\.$/, '').trim() + '.')
-            .filter(line => line.trim() !== '.');
+            // Update the resumes table with the S3 URL
+            const updateResumeQuery = 'UPDATE resumes SET s3_url = ? WHERE id = ?';
+            connection.query(updateResumeQuery, [data.Location, resumeId], (updateErr) => {
+              if (updateErr) {
+                console.error('Error updating resume with S3 URL:', updateErr);
+                return res.status(500).send('Error updating resume with S3 URL');
+              }
 
-        const user = req.session.user;
-
-        const insertEducationQuery = 'INSERT INTO Education (user_id, degree, institution, start_date, end_date, email) VALUES (?, ?, ?, ?, ?, ?)';
-        const educationValues = [user.id, degree, institution, startDate, endDate, email];
-        connection.query(insertEducationQuery, educationValues, (error, results) => {
-            if (error) {
-                console.error('Error saving education:', error);
-                return res.status(500).send('Error saving education');
-            }
-
-            const insertExperienceQuery = 'INSERT INTO Experience (user_id, company_name, role, start_date, end_date, description, email) VALUES (?, ?, ?, ?, ?, ?, ?)';
-            const experienceValues = [user.id, company_name, role, experience_start_date, experience_end_date, experiencePoints.join(' '), email];
-            connection.query(insertExperienceQuery, experienceValues, (error, results) => {
-                if (error) {
-                    console.error('Error saving experience:', error);
-                    return res.status(500).send('Error saving experience');
-                }
-
-                const parsedSkills = parseSkills(skills);
-                const insertSkillsQuery = 'INSERT INTO Skills (user_id, email, skill_name, proficiency_level) VALUES (?, ?, ?, ?)';
-                parsedSkills.forEach(skill => {
-                    const skillValues = [user.id, email, skill.skill_name, skill.proficiency_level];
-                    connection.query(insertSkillsQuery, skillValues, (error, results) => {
-                        if (error) {
-                            console.error('Error saving skill:', error);
-                            return res.status(500).send('Error saving skill');
-                        }
-                    });
-                });
-
-                const parsedCertificates = parseCertificates(certificate_name, issuing_organization, issue_date, expiration_date);
-                const insertCertificatesQuery = 'INSERT INTO Certificates (user_id, certificate_name, issuing_organization, issue_date, expiration_date, email) VALUES (?, ?, ?, ?, ?, ?)';
-                parsedCertificates.forEach(cert => {
-                    const certificateValues = [user.id, cert.certificate_name, cert.issuing_organization, cert.issue_date, cert.expiration_date, email];
-                    connection.query(insertCertificatesQuery, certificateValues, (error, results) => {
-                        if (error) {
-                            console.error('Error saving certificate:', error);
-                            return res.status(500).send('Error saving certificate');
-                        }
-                    });
-                });
-
-                const insertResumeQuery = 'INSERT INTO resumes (user_id, firstName, lastName, email, phone, degree, institution, start_date, end_date, experience, skills, linkedUrl) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
-                const resumeValues = [user.id, firstName, lastName, email, phone, degree, institution, startDate, endDate, experiencePoints.join(' '), skills, linkedUrl];
-                connection.query(insertResumeQuery, resumeValues, (error, results) => {
-                    if (error) {
-                        console.error('Error saving resume:', error);
-                        return res.status(500).send('Error saving resume');
-                    }
-                    res.render('generated_resume', {
-                        firstName,
-                        lastName,
-                        email,
-                        phone,
-                        degree,
-                        institution,
-                        startDate,
-                        endDate,
-                        company_name,
-                        role,
-                        experience_start_date,
-                        experience_end_date,
-                        description: experiencePoints,
-                        skills: parsedSkills,
-                        linkedUrl,
-                        certificates: parsedCertificates
-                    });
-                });
+              // Render the resume on the dashboard
+              res.render('generated_resume', {
+                firstName,
+                lastName,
+                email,
+                phone,
+                education: parsedEducation,
+                experience: parsedExperience.map(exp => ({
+                  ...exp,
+                  description: typeof exp.description === 'string' ? exp.description.split('; ').map(point => point.trim() + '.').filter(point => point.length > 1) : exp.description
+                })),
+                skills: parsedSkills,
+                linkedUrl,
+                certificates: parsedCertificates,
+                projects: parsedProjects, // Include projects
+                downloadUrl: data.Location,  // Provide the S3 URL for downloading
+                pdf: false // Set pdf to false for web rendering
+              });
             });
-        });
-    } catch (error) {
-        console.error('Error generating description:', error);
-        res.status(500).send('Error generating description');
-    }
+          });
+        } catch (error) {
+          console.error('Error generating PDF:', error);
+          res.status(500).send('Error generating PDF');
+        }
+      });
+    });
+  } catch (error) {
+    console.error('Error generating description:', error);
+    res.status(500).send('Error generating description');
+  }
 });
-
+  
+  router.get('/download_resume', async (req, res) => {
+    if (!req.session.user) {
+      return res.redirect('/login'); // Redirect to login if the user is not logged in
+    }
+  
+    const userId = req.session.user.id;
+  
+    const query = 'SELECT s3_url FROM resumes WHERE user_id = ? ORDER BY created_at DESC LIMIT 1';
+    connection.query(query, [userId], (error, results) => {
+      if (error) {
+        console.error('Error fetching resume URL:', error);
+        return res.status(500).send('Error fetching resume URL');
+      }
+  
+      if (results.length === 0 || !results[0].s3_url) {
+        return res.status(404).send('No resume found');
+      }
+  
+      const pdfUrl = results[0].s3_url;
+      res.redirect(pdfUrl); // Redirect the user to the S3 URL for downloading
+    });
+  });
   
 
 router.get('/user-count', (req, res) => {
@@ -385,77 +688,104 @@ router.get('/user/:email/experience', (req, res) => {
     });
   });
   
-  router.get('/user/:email/degree', (req, res) => {
+  router.get('/user/:email/education/degrees', (req, res) => {
     const email = req.params.email;
-    const query = 'SELECT degree FROM Education e JOIN users u ON e.user_id = u.id WHERE u.email = ?';
-  
+    const query = `
+        SELECT degree FROM Education e
+        JOIN users u ON e.user_id = u.id
+        WHERE u.email = ?;
+    `;
+
     connection.query(query, [email], (error, results) => {
-      if (error) {
-        console.error('Error querying the database:', error);
-        return res.status(500).send('Error querying the database');
-      }
-  
-      if (results.length === 0) {
-        return res.status(404).send('No degree found for the given email');
-      }
-  
-      res.json({ degree: results[0].degree });
+        if (error) {
+            console.error('Error querying the database:', error);
+            return res.status(500).send('Error querying the database');
+        }
+
+        if (results.length === 0) {
+            return res.status(404).send('No degree found for the given email');
+        }
+
+        const degrees = results.map(row => row.degree);
+        res.json({ degrees });
     });
-  });
+});
+
   
-  router.get('/user/:email/institution', (req, res) => {
+router.get('/user/:email/education/institutions', (req, res) => {
     const email = req.params.email;
-    const query = 'SELECT institution FROM Education e JOIN users u ON e.user_id = u.id WHERE u.email = ?';
-  
+    const query = `
+        SELECT institution FROM Education e
+        JOIN users u ON e.user_id = u.id
+        WHERE u.email = ?;
+    `;
+
     connection.query(query, [email], (error, results) => {
-      if (error) {
-        console.error('Error querying the database:', error);
-        return res.status(500).send('Error querying the database');
-      }
-  
-      if (results.length === 0) {
-        return res.status(404).send('No institution found for the given email');
-      }
-  
-      res.json({ institution: results[0].institution });
+        if (error) {
+            console.error('Error querying the database:', error);
+            return res.status(500).send('Error querying the database');
+        }
+
+        if (results.length === 0) {
+            return res.status(404).send('No institution found for the given email');
+        }
+
+        const institutions = results.map(row => row.institution);
+        res.json({ institutions });
     });
-  });
+});
+
+
   
-  router.get('/user/:email/start_date', (req, res) => {
+router.get('/user/:email/education/start_dates', (req, res) => {
     const email = req.params.email;
-    const query = 'SELECT DATE_FORMAT(start_date, "%Y-%m-%d") AS start_date FROM Education e JOIN users u ON e.user_id = u.id WHERE u.email = ?';
-  
+    const query = `
+        SELECT DATE_FORMAT(start_date, "%Y-%m-%d") AS start_date FROM Education e
+        JOIN users u ON e.user_id = u.id
+        WHERE u.email = ?;
+    `;
+
     connection.query(query, [email], (error, results) => {
-      if (error) {
-        console.error('Error querying the database:', error);
-        return res.status(500).send('Error querying the database');
-      }
-  
-      if (results.length === 0) {
-        return res.status(404).send('No start date found for the given email');
-      }
-  
-      res.json({ start_date: results[0].start_date });
+        if (error) {
+            console.error('Error querying the database:', error);
+            return res.status(500).send('Error querying the database');
+        }
+
+        if (results.length === 0) {
+            return res.status(404).send('No start date found for the given email');
+        }
+
+        const start_dates = results.map(row => row.start_date);
+        res.json({ start_dates });
     });
-  });
+});
+
+
+
   
-  router.get('/user/:email/end_date', (req, res) => {
+router.get('/user/:email/education/end_dates', (req, res) => {
     const email = req.params.email;
-    const query = 'SELECT DATE_FORMAT(end_date, "%Y-%m-%d") AS end_date FROM Education e JOIN users u ON e.user_id = u.id WHERE u.email = ?';
-  
+    const query = `
+        SELECT DATE_FORMAT(end_date, "%Y-%m-%d") AS end_date FROM Education e
+        JOIN users u ON e.user_id = u.id
+        WHERE u.email = ?;
+    `;
+
     connection.query(query, [email], (error, results) => {
-      if (error) {
-        console.error('Error querying the database:', error);
-        return res.status(500).send('Error querying the database');
-      }
-  
-      if (results.length === 0) {
-        return res.status(404).send('No end date found for the given email');
-      }
-  
-      res.json({ end_date: results[0].end_date });
+        if (error) {
+            console.error('Error querying the database:', error);
+            return res.status(500).send('Error querying the database');
+        }
+
+        if (results.length === 0) {
+            return res.status(404).send('No end date found for the given email');
+        }
+
+        const end_dates = results.map(row => row.end_date);
+        res.json({ end_dates });
     });
-  });
+});
+
   
   router.get('/user/:email/experience', (req, res) => {
     const email = req.params.email;
@@ -780,5 +1110,76 @@ router.get('/user/:email/certificates', (req, res) => {
     });
   });
 
-  module.exports = router;
+  router.get('/user/:email/projects', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT p.project_name, p.github_link FROM Projects p JOIN users u ON p.user_id = u.id WHERE u.email = ?';
+    
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
   
+      if (results.length === 0) {
+        return res.status(404).send('No projects found for the given email');
+      }
+  
+      res.json(results);
+    });
+  });
+  
+  router.get('/user/:email/projects/names', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT p.project_name FROM Projects p JOIN users u ON p.user_id = u.id WHERE u.email = ?';
+  
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No project names found for the given email');
+      }
+  
+      res.json(results.map(row => row.project_name));
+    });
+  });
+  
+  router.get('/user/:email/projects/github_links', (req, res) => {
+    const email = req.params.email;
+    const query = 'SELECT p.github_link FROM Projects p JOIN users u ON p.user_id = u.id WHERE u.email = ?';
+  
+    connection.query(query, [email], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No GitHub links found for the given email');
+      }
+  
+      res.json(results.map(row => row.github_link));
+    });
+  });
+  
+  router.get('/user/:email/projects/:project_name', (req, res) => {
+    const { email, project_name } = req.params;
+    const query = 'SELECT p.project_name, p.github_link FROM Projects p JOIN users u ON p.user_id = u.id WHERE u.email = ? AND p.project_name = ?';
+  
+    connection.query(query, [email, project_name], (error, results) => {
+      if (error) {
+        console.error('Error querying the database:', error);
+        return res.status(500).send('Error querying the database');
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).send('No details found for the given project');
+      }
+  
+      res.json(results[0]);
+    });
+  });
+  
+  module.exports = router;
