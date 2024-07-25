@@ -5,8 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Generated Resume</title>
     <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/resume_styles.css">
 </head>
 <body>
+    <% if (!pdf) { %>
     <header>
         <div class="container">
             <div id="branding">
@@ -19,35 +21,39 @@
             </nav>
         </div>
     </header>
-    <div class="container">
-        <h1>Resume for <%= firstName %> <%= lastName %></h1>
-        <p>Email: <%= email %></p>
-        <p>Phone: <%= phone %></p>
+    <% } %>
+    <div class="resume-container">
+        <h1><%= firstName %> <%= lastName %></h1>
+        <p><%= phone %> | <%= email %> | <a href="<%= linkedUrl %>" target="_blank"><%= linkedUrl %></a></p>
         <h2>Education</h2>
-        <p>Degree: <%= degree %></p>
-        <p>Institution: <%= institution %></p>
-        <p>Start Date: <%= startDate %></p>
-        <p>End Date: <%= endDate %></p>
-        <h2>Experience</h2>
-        <p>Company Name: <%= company_name %></p>
-        <p>Role: <%= role %></p>
-        <p>Experience Start Date: <%= experience_start_date %></p>
-        <p>Experience End Date: <%= experience_end_date %></p>
+        <% education.forEach(function(edu) { %>
+            <p><strong><%= edu.institution %></strong> | <%= edu.start_date %> - <%= edu.end_date %><br>
+            <%= edu.degree %></p>
+        <% }); %>
+        <h2>Projects</h2>
         <ul>
-            <% description.forEach(function(point) { %>
-                <li><%= point %></li>
-            <% }); %>
+        <% projects.forEach(function(project) { %>
+            <li>
+            <strong><%= project.project_name %></strong><br>
+            <a href="<%= project.github_link %>" target="_blank"><%= project.github_link %></a>
+            </li>
+        <% }); %>
         </ul>
+        <h2>Experience</h2>
+        <% experience.forEach(function(exp) { %>
+            <p><strong><%= exp.role %></strong>, <%= exp.company_name %> | <%= exp.start_date %> - <%= exp.end_date %></p>
+            <ul>
+                <% (typeof exp.description === 'string' ? exp.description.split('; ') : exp.description).forEach(function(point) { %>
+                    <li><%= point %></li>
+                <% }); %>
+            </ul>
+        <% }); %>
         <h2>Skills</h2>
         <ul>
             <% skills.forEach(function(skill) { %>
                 <li><%= skill.skill_name %> - <%= skill.proficiency_level %></li>
             <% }); %>
         </ul>
-        <% if (linkedUrl) { %>
-            <h2>LinkedIn</h2>
-            <p><a href="<%= linkedUrl %>"><%= linkedUrl %></a></p>
-        <% } %>
         <h2>Certificates</h2>
         <ul>
             <% certificates.forEach(function(cert) { %>
@@ -57,6 +63,9 @@
                 </li>
             <% }); %>
         </ul>
+        <% if (!pdf) { %>
+        <a href="<%= downloadUrl %>" class="download-btn">Download PDF</a>
+        <% } %>
     </div>
 </body>
 </html>
