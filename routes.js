@@ -119,7 +119,7 @@ router.get('/show_resume', (req, res) => {
   const userId = req.session.user.id;
 
   const query = `
-    SELECT resumes.s3_url, comments.comment, comments.created_at
+    SELECT resumes.id AS resumeId, resumes.s3_url, comments.comment, comments.created_at
     FROM resumes
     LEFT JOIN comments ON resumes.id = comments.resume_id
     WHERE resumes.user_id = ?
@@ -133,24 +133,24 @@ router.get('/show_resume', (req, res) => {
     }
 
     if (results.length === 0) {
-      return res.status(404).send('No resume found');
+      return res.render('show_resume', { pdfUrl: null, comments: [], resumeId: null });
     }
 
     const resumeData = results[0];
     const comments = results.map(row => ({ comment: row.comment, created_at: row.created_at })).filter(row => row.comment);
 
-    res.render('show_resume', { pdfUrl: resumeData.s3_url, comments });
+    res.render('show_resume', { pdfUrl: resumeData.s3_url, comments, resumeId: resumeData.resumeId });
   });
 });
 
 
 router.get('/admin_dashboard', (req, res) => {
   if (!req.session.user || !req.session.user.is_admin) {
-    return res.status(403).send('Access denied'); // Only allow access if the user is an admin
+    return res.status(403).send('Access denied');
   }
 
   const query = `
-    SELECT users.firstName, users.lastName, resumes.id, resumes.s3_url, comments.comment, comments.created_at
+    SELECT users.firstName, users.lastName, resumes.id, resumes.s3_url, comments.comment, comments.created_at, comments.id AS commentId
     FROM resumes
     JOIN users ON resumes.user_id = users.id
     LEFT JOIN comments ON resumes.id = comments.resume_id
@@ -165,14 +165,14 @@ router.get('/admin_dashboard', (req, res) => {
     const resumes = results.reduce((acc, row) => {
       const resume = acc.find(r => r.id === row.id);
       if (resume) {
-        resume.comments.push({ comment: row.comment, created_at: row.created_at });
+        resume.comments.push({ comment: row.comment, created_at: row.created_at, id: row.commentId });
       } else {
         acc.push({
           id: row.id,
           firstName: row.firstName,
           lastName: row.lastName,
           s3_url: row.s3_url,
-          comments: row.comment ? [{ comment: row.comment, created_at: row.created_at }] : []
+          comments: row.comment ? [{ comment: row.comment, created_at: row.created_at, id: row.commentId }] : []
         });
       }
       return acc;
@@ -201,6 +201,69 @@ router.post('/add_comment', (req, res) => {
     res.redirect('/admin_dashboard');
   });
 });
+
+// Route to display the edit form
+router.get('/edit_comment/:id', (req, res) => {
+  if (!req.session.user || !req.session.user.is_admin) {
+      return res.status(403).send('Access denied');
+  }
+
+  const commentId = req.params.id;
+  const query = 'SELECT * FROM comments WHERE id = ?';
+  connection.query(query, [commentId], (error, results) => {
+      if (error) {
+          console.error('Error fetching comment:', error);
+          return res.status(500).send('Error fetching comment');
+      }
+
+      if (results.length === 0) {
+          return res.status(404).send('Comment not found');
+      }
+
+      res.render('edit_comment', { comment: results[0] });
+  });
+});
+
+// Route to handle the submission of edited comments
+router.post('/edit_comment/:id', (req, res) => {
+  if (!req.session.user || !req.session.user.is_admin) {
+      return res.status(403).send('Access denied');
+  }
+
+  const commentId = req.params.id;
+  const updatedComment = req.body.comment;
+
+  const query = 'UPDATE comments SET comment = ? WHERE id = ?';
+  connection.query(query, [updatedComment, commentId], (error, results) => {
+      if (error) {
+          console.error('Error updating comment:', error);
+          return res.status(500).send('Error updating comment');
+      }
+
+      res.redirect('/admin_dashboard');
+  });
+});
+
+
+// Route to delete a comment
+router.post('/delete_comment/:id', (req, res) => {
+  if (!req.session.user || !req.session.user.is_admin) {
+    return res.status(403).send('Access denied');
+  }
+
+  const commentId = req.params.id;
+
+  const query = 'DELETE FROM comments WHERE id = ?';
+  connection.query(query, [commentId], (error, results) => {
+    if (error) {
+      console.error('Error deleting comment:', error);
+      return res.status(500).send('Error deleting comment');
+    }
+
+    res.redirect('/admin_dashboard');
+  });
+});
+
 
 
 
@@ -354,7 +417,10 @@ router.post('/generate_resume', async (req, res) => {
 
     // Add generated experience points to each experience entry
     parsedExperience.forEach((exp, index) => {
-      exp.description = experiencePointsArray[index].join('; '); // Ensure it's a string
+      exp.full_description = exp.description; // Store the user input in full_description
+      if (experiencePointsArray[index]) {
+        exp.description = experiencePointsArray[index].join('; '); // Replace this if your implementation of description involves experience points
+      }
     });
 
     // Inserting Education
@@ -368,14 +434,25 @@ router.post('/generate_resume', async (req, res) => {
     });
 
     // Inserting Experience
-    const insertExperienceQuery = 'INSERT INTO Experience (user_id, company_name, role, start_date, end_date, description, email) VALUES ?';
-    const experienceValues = parsedExperience.map(exp => [user.id, exp.company_name, exp.role, exp.start_date, exp.end_date, exp.description, email]);
+    const insertExperienceQuery = 'INSERT INTO Experience (user_id, company_name, role, start_date, end_date, description, full_description, email) VALUES ?';
+    const experienceValues = parsedExperience.map(exp => [
+      user.id,
+      exp.company_name,
+      exp.role,
+      exp.start_date,
+      exp.end_date,
+      exp.description, // Summary or generated description
+      exp.full_description, // Full user-provided description
+      email
+    ]);
+    
     connection.query(insertExperienceQuery, [experienceValues], (error, results) => {
       if (error) {
         console.error('Error saving experience:', error);
         return res.status(500).send('Error saving experience');
       }
     });
+
 
     // Inserting Skills
     const insertSkillsQuery = 'INSERT INTO Skills (user_id, email, skill_name, proficiency_level) VALUES ?';
@@ -438,7 +515,8 @@ router.post('/generate_resume', async (req, res) => {
         certificates: parsedCertificates,
         projects: parsedProjects, // Include projects
         pdf: false,  // Indicate that this is for web rendering
-        downloadUrl: ''  // Provide an empty default value for web rendering
+        downloadUrl: '',  // Provide an empty default value for web rendering
+        resumeId: resumeId
       }, async (err, html) => {
         if (err) {
           console.error('Error rendering resume HTML:', err);
@@ -461,7 +539,8 @@ router.post('/generate_resume', async (req, res) => {
             linkedUrl,
             certificates: parsedCertificates,
             projects: parsedProjects, // Include projects
-            pdf: true  // Indicate that this is for PDF generation
+            pdf: true,
+            resumeId: resumeId  // Indicate that this is for PDF generation
           });
 
           // Generate PDF from HTML
@@ -516,7 +595,8 @@ router.post('/generate_resume', async (req, res) => {
                 certificates: parsedCertificates,
                 projects: parsedProjects, // Include projects
                 downloadUrl: data.Location,  // Provide the S3 URL for downloading
-                pdf: false // Set pdf to false for web rendering
+                pdf: false,
+                resumeId: resumeId // Set pdf to false for web rendering
               });
             });
           });
@@ -1181,5 +1261,295 @@ router.get('/user/:email/certificates', (req, res) => {
       res.json(results[0]);
     });
   });
+
+router.post('/edit_resume/:id', async (req, res) => {
+  const resumeId = req.params.id;
+  const user = req.session.user;
+
+  if (!user || !user.id) {
+    return res.status(403).send('User not authenticated or session expired');
+  }
+
+  const { firstName, lastName, email, phone } = user;
+  const { skills, linkedUrl, education, experience, certificates, projects } = req.body;
+
+  try {
+    connection.beginTransaction(async (err) => {
+      if (err) {
+        console.error('Error starting transaction:', err);
+        return res.status(500).send('Error starting transaction');
+      }
+
+      try {
+        // Parse skills
+        const parsedSkills = parseSkills(skills || '');
+        const skillsString = parsedSkills.map(skill => `${skill.skill_name}:${skill.proficiency_level}`).join(', ');
+
+        // Update resume data in the database
+        const updateResumeQuery = 'UPDATE resumes SET skills = ?, linkedUrl = ? WHERE id = ?';
+        const resumeValues = [skillsString, linkedUrl, resumeId];
+
+        await new Promise((resolve, reject) => {
+          connection.query(updateResumeQuery, resumeValues, (err) => {
+            if (err) {
+              console.error('Error updating resume:', err);
+              return reject(err);
+            }
+            resolve();
+          });
+        });
+
+        // Update or insert skills
+        const updateSkillsQuery = 'REPLACE INTO Skills (user_id, skill_name, proficiency_level) VALUES (?, ?, ?)';
+        for (const skill of parsedSkills) {
+          await new Promise((resolve, reject) => {
+            connection.query(updateSkillsQuery, [user.id, skill.skill_name, skill.proficiency_level], (err) => {
+              if (err) {
+                console.error('Error updating skills:', err);
+                return reject(err);
+              }
+              resolve();
+            });
+          });
+        }
+
+        // Update or insert experience
+        if (experience) {
+          const parsedExperience = parseExperience(experience);
+          const updateExperienceQuery = 'REPLACE INTO Experience (user_id, company_name, role, start_date, end_date, description) VALUES (?, ?, ?, ?, ?, ?)';
+          for (const exp of parsedExperience) {
+            await new Promise((resolve, reject) => {
+              connection.query(updateExperienceQuery, [user.id, exp.company_name, exp.role, exp.start_date, exp.end_date, exp.description], (err) => {
+                if (err) {
+                  console.error('Error updating experience:', err);
+                  return reject(err);
+                }
+                resolve();
+              });
+            });
+          }
+        }
+
+        // Update or insert projects
+        if (projects) {
+          const parsedProjects = parseProjects(projects);
+          const updateProjectsQuery = 'REPLACE INTO Projects (user_id, project_name, github_link) VALUES (?, ?, ?)';
+          for (const project of parsedProjects) {
+            await new Promise((resolve, reject) => {
+              connection.query(updateProjectsQuery, [user.id, project.project_name, project.github_link], (err) => {
+                if (err) {
+                  console.error('Error updating projects:', err);
+                  return reject(err);
+                }
+                resolve();
+              });
+            });
+          }
+        }
+
+        // Update or insert certificates
+      if (certificates) {
+        const parsedCertificates = parseCertificates(certificates);
+        const updateCertificatesQuery = 'REPLACE INTO Certificates (user_id, certificate_name, issuing_organization, issue_date, expiration_date) VALUES (?, ?, ?, ?, ?)';
+        for (const cert of parsedCertificates) {
+          await new Promise((resolve, reject) => {
+            connection.query(updateCertificatesQuery, [user.id, cert.certificate_name, cert.issuing_organization, cert.issue_date, cert.expiration_date], (err) => {
+              if (err) {
+                console.error('Error updating certificates:', err);
+                return reject(err);
+              }
+              resolve();
+            });
+          });
+        }
+        }
+
+        // Fetch updated resume data
+        const query = `
+          SELECT resumes.*, 
+                GROUP_CONCAT(DISTINCT CONCAT_WS(':', e.degree, e.institution, DATE_FORMAT(e.start_date, '%Y-%m-%d'), DATE_FORMAT(e.end_date, '%Y-%m-%d')) ORDER BY e.start_date SEPARATOR ';;') AS education,
+                GROUP_CONCAT(DISTINCT CONCAT_WS(':', p.project_name, p.github_link) ORDER BY p.project_name SEPARATOR ';;') AS projects,
+                GROUP_CONCAT(DISTINCT CONCAT_WS(':', exp.company_name, exp.role, DATE_FORMAT(exp.start_date, '%Y-%m-%d'), DATE_FORMAT(exp.end_date, '%Y-%m-%d'), exp.description) ORDER BY exp.start_date SEPARATOR ';;') AS experience,
+                GROUP_CONCAT(DISTINCT CONCAT_WS(':', c.certificate_name, c.issuing_organization, DATE_FORMAT(c.issue_date, '%Y-%m-%d'), DATE_FORMAT(c.expiration_date, '%Y-%m-%d')) ORDER BY c.issue_date SEPARATOR ';;') AS certificates
+          FROM resumes
+          LEFT JOIN Education e ON resumes.user_id = e.user_id
+          LEFT JOIN Projects p ON resumes.user_id = p.user_id
+          LEFT JOIN Experience exp ON resumes.user_id = exp.user_id
+          LEFT JOIN Certificates c ON resumes.user_id = c.user_id
+          WHERE resumes.id = ? AND resumes.user_id = ?
+          GROUP BY resumes.id
+        `;
+
+        connection.query(query, [resumeId, user.id], async (error, results) => {
+          if (error) {
+            console.error('Error fetching updated resume details:', error);
+            return res.status(500).send('Error fetching updated resume details');
+          }
+
+          if (results.length === 0) {
+            return res.status(404).send('Resume not found');
+          }
+
+          const resume = results[0];
+          resume.education = resume.education ? resume.education.split(';;').map(edu => {
+            const [degree, institution, start_date, end_date] = edu.split(':');
+            return { degree, institution, start_date, end_date };
+          }) : [];
+
+          resume.projects = resume.projects ? resume.projects.split(';;').map(proj => {
+            let [project_name, github_link] = proj.split(':');
+            if (github_link && !github_link.startsWith('http://') && !github_link.startsWith('https://')) {
+              github_link = 'https://' + github_link; // Default to https
+            }
+            return { project_name, github_link };
+          }) : [];
+
+          resume.experience = resume.experience ? resume.experience.split(';;').map(exp => {
+            const [company_name, role, start_date, end_date, description] = exp.split(':');
+            return { company_name, role, start_date, end_date, description };
+          }) : [];
+
+          resume.certificates = resume.certificates ? resume.certificates.split(';;').map(cert => {
+            const [certificate_name, issuing_organization, issue_date, expiration_date] = cert.split(':');
+            return { certificate_name, issuing_organization, issue_date, expiration_date };
+          }) : [];
+
+          // Render the resume to HTML for the web view
+          ejs.renderFile(path.join(__dirname, 'views', 'update_generated_resume.ejs'), {
+            firstName,
+            lastName,
+            email,
+            phone,
+            linkedUrl,
+            skills: parsedSkills,
+            education: resume.education,
+            experience: resume.experience,
+            certificates: resume.certificates,
+            projects: resume.projects,
+            pdf: false  // Indicate that this is for web rendering
+          }, async (err, html) => {
+            if (err) {
+              console.error('Error rendering resume HTML:', err);
+              return res.status(500).send('Error rendering resume HTML');
+            }
+
+            try {
+              // Render the resume to HTML for PDF generation
+              const pdfHtml = await ejs.renderFile(path.join(__dirname, 'views', 'update_generated_resume.ejs'), {
+                firstName,
+                lastName,
+                email,
+                phone,
+                linkedUrl,
+                skills: parsedSkills,
+                education: resume.education,
+                experience: resume.experience,
+                certificates: resume.certificates,
+                projects: resume.projects,
+                pdf: true  // Indicate that this is for PDF generation
+              });
+
+              // Generate PDF from HTML
+              const browser = await puppeteer.launch({
+                args: ['--no-sandbox', '--disable-setuid-sandbox']
+              });
+              const page = await browser.newPage();
+              await page.setContent(pdfHtml, { waitUntil: 'networkidle0' });
+
+              const pdfBuffer = await page.pdf({ format: 'A4' });
+              await browser.close();
+
+              // Upload PDF to S3
+              const s3Params = {
+                Bucket: 'resume-generator-ocu',
+                Key: `resumes/${user.id}-${Date.now()}.pdf`,
+                Body: pdfBuffer,
+                ContentType: 'application/pdf'
+              };
+
+              s3.upload(s3Params, (s3Err, data) => {
+                if (s3Err) {
+                  console.error('Error uploading PDF to S3:', s3Err);
+                  return res.status(500).send('Error uploading PDF to S3');
+                }
+
+                // Update the resumes table with the S3 URL
+                const updateResumeS3Query = 'UPDATE resumes SET s3_url = ? WHERE id = ?';
+                connection.query(updateResumeS3Query, [data.Location, resumeId], (updateErr) => {
+                  if (updateErr) {
+                    console.error('Error updating resume with S3 URL:', updateErr);
+                    return res.status(500).send('Error updating resume with S3 URL');
+                  }
+
+                  // Render the final resume view with the download link
+                  ejs.renderFile(path.join(__dirname, 'views', 'update_generated_resume.ejs'), {
+                    firstName,
+                    lastName,
+                    email,
+                    phone,
+                    linkedUrl,
+                    skills: parsedSkills,
+                    education: resume.education,
+                    experience: resume.experience,
+                    certificates: resume.certificates,
+                    projects: resume.projects,
+                    downloadUrl: data.Location, // Set the download URL for the PDF
+                    pdf: false  // For the web view
+                  }, (renderErr, finalHtml) => {
+                    if (renderErr) {
+                      console.error('Error rendering final HTML:', renderErr);
+                      return res.status(500).send('Error rendering final HTML');
+                    }
+
+                    connection.commit((commitErr) => {
+                      if (commitErr) {
+                        console.error('Error committing transaction:', commitErr);
+                        return connection.rollback(() => res.status(500).send('Error committing transaction'));
+                      }
+
+                      res.send(finalHtml); // Send the final HTML response
+                    });
+                  });
+                });
+              });
+            } catch (error) {
+              console.error('Error generating PDF:', error);
+              res.status(500).send('Error generating PDF');
+            }
+          });
+        });
+      } catch (transactionError) {
+        console.error('Transaction error:', transactionError);
+        connection.rollback(() => res.status(500).send('Error processing transaction'));
+      }
+    });
+  } catch (error) {
+    console.error('Error updating resume:', error);
+    res.status(500).send('Error updating resume');
+  }
+  });
+
+
+
+
+
+
+// Handle resume deletion
+router.post('/delete_resume/:id', (req, res) => {
+  const resumeId = req.params.id;
+
+  const query = 'DELETE FROM resumes WHERE id = ? AND user_id = ?';
+  connection.query(query, [resumeId, req.session.user.id], (error) => {
+    if (error) {
+      console.error('Error deleting resume:', error);
+      return res.status(500).send('Error deleting resume');
+    }
+
+    // Render a confirmation page after deletion
+    res.render('resume_deleted'); // You can change this view name as needed
+  });
+});
+
+
   
   module.exports = router;
