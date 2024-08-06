@@ -7,6 +7,7 @@ const AWS = require('aws-sdk');
 const ejs = require('ejs');
 const path = require('path');
 const puppeteer = require('puppeteer');
+// const mysql = require('mysql2/promise');
 
 const dbConfig = {
   host: process.env.DB_HOST,
@@ -713,7 +714,9 @@ router.get('/user/:email/experience', (req, res) => {
       res.json(results);
     });
   });
+
   
+
   router.get('/user/:email/phone', (req, res) => {
     const email = req.params.email;
     const query = 'SELECT phone FROM resumes WHERE email = ?';
@@ -1207,7 +1210,110 @@ router.get('/user/:email/certificates', (req, res) => {
       res.json(results);
     });
   });
-  
+
+  router.post('/user/:email/projects', (req, res) => {
+    const email = req.params.email;
+    const { project_name, github_link } = req.body;
+
+    console.log('Received data:', { project_name, github_link });
+
+    if (!project_name || !github_link) {
+        return res.status(400).send('All fields are required');
+    }
+
+    const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+    connection.query(getUserIdQuery, [email], (error, results) => {
+        if (error) {
+            console.error('Error querying the database:', error);
+            return res.status(500).send('Error querying the database');
+        }
+
+        if (results.length === 0) {
+            return res.status(404).send('User not found');
+        }
+
+        const user_id = results[0].id;
+        const insertProjectQuery = 'INSERT INTO Projects (user_id, project_name, github_link) VALUES (?, ?, ?)';
+        const values = [user_id, project_name, github_link];
+
+        connection.query(insertProjectQuery, values, (error, results) => {
+            if (error) {
+                console.error('Error inserting project:', error);
+                return res.status(500).send('Error inserting project');
+            }
+            console.log('Project added successfully:', results);
+            res.status(201).send('Project added successfully');
+        });
+    });
+});
+
+
+router.put('/user/:email/projects/:id', (req, res) => {
+  const email = req.params.email;
+  const project_id = req.params.id;
+  const { project_name, github_link } = req.body;
+
+  console.log('Received data:', { project_name, github_link });
+
+  if (!project_name || !github_link) {
+      return res.status(400).send('All fields are required');
+  }
+
+  const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+  connection.query(getUserIdQuery, [email], (error, results) => {
+      if (error) {
+          console.error('Error querying the database:', error);
+          return res.status(500).send('Error querying the database');
+      }
+
+      if (results.length === 0) {
+          return res.status(404).send('User not found');
+      }
+
+      const user_id = results[0].id;
+      const updateProjectQuery = 'UPDATE Projects SET project_name = ?, github_link = ? WHERE user_id = ? AND id = ?';
+      const values = [project_name, github_link, user_id, project_id];
+
+      connection.query(updateProjectQuery, values, (error, results) => {
+          if (error) {
+              console.error('Error updating project:', error);
+              return res.status(500).send('Error updating project');
+          }
+          res.status(200).send('Project updated successfully');
+      });
+  });
+});
+
+
+router.delete('/user/:email/projects/:id', (req, res) => {
+  const email = req.params.email;
+  const project_id = req.params.id;
+
+  const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+  connection.query(getUserIdQuery, [email], (error, results) => {
+      if (error) {
+          console.error('Error querying the database:', error);
+          return res.status(500).send('Error querying the database');
+      }
+
+      if (results.length === 0) {
+          return res.status(404).send('User not found');
+      }
+
+      const user_id = results[0].id;
+      const deleteProjectQuery = 'DELETE FROM Projects WHERE user_id = ? AND id = ?';
+
+      connection.query(deleteProjectQuery, [user_id, project_id], (error, results) => {
+          if (error) {
+              console.error('Error deleting project:', error);
+              return res.status(500).send('Error deleting project');
+          }
+          res.status(200).send('Project deleted successfully');
+      });
+  });
+});
+
+
   router.get('/user/:email/projects/names', (req, res) => {
     const email = req.params.email;
     const query = 'SELECT p.project_name FROM Projects p JOIN users u ON p.user_id = u.id WHERE u.email = ?';
@@ -1333,9 +1439,68 @@ router.post('/edit_resume/:id', async (req, res) => {
   }
 
   const { firstName, lastName, email, phone } = user;
-  const { skills, linkedUrl, education, experience, certificates, projects } = req.body;
+  const { skills, linkedUrl, degree, institution, education_start_date, education_end_date, company_name, role, experience_start_date, experience_end_date, description, project_name, github_link, certificates } = req.body;
+
+  function parseExperienceFromForm(companyNames, roles, startDates, endDates, descriptions) {
+    const experience = [];
+    for (let i = 0; i < companyNames.length; i++) {
+      experience.push({
+        company_name: companyNames[i],
+        role: roles[i],
+        start_date: startDates[i],
+        end_date: endDates[i],
+        description: descriptions[i]
+      });
+    }
+    return experience;
+  }
+
+  function parseEducationFromForm(degrees, institutions, startDates, endDates) {
+    const education = [];
+    for (let i = 0; i < degrees.length; i++) {
+      education.push({
+        degree: degrees[i],
+        institution: institutions[i],
+        start_date: startDates[i],
+        end_date: endDates[i]
+      });
+    }
+    return education;
+  }
+
+  function parseProjectsFromForm(projectNames, githubLinks) {
+    const projects = [];
+    for (let i = 0; i < projectNames.length; i++) {
+      let link = githubLinks[i].trim();
+      if (!link.startsWith('http://') && !link.startsWith('https://')) {
+        link = `https://${link}`;
+      }
+      projects.push({
+        project_name: projectNames[i],
+        github_link: link
+      });
+    }
+    return projects;
+  }
 
   try {
+    // Check and log form data
+    console.log('degree:', degree);
+    console.log('institution:', institution);
+    console.log('education_start_date:', education_start_date);
+    console.log('education_end_date:', education_end_date);
+    console.log('company_name:', company_name);
+    console.log('role:', role);
+    console.log('experience_start_date:', experience_start_date);
+    console.log('experience_end_date:', experience_end_date);
+    console.log('description:', description);
+    console.log('project_name:', project_name);
+    console.log('github_link:', github_link);
+
+    if (!Array.isArray(degree) || !Array.isArray(institution) || !Array.isArray(education_start_date) || !Array.isArray(education_end_date) || !Array.isArray(company_name) || !Array.isArray(role) || !Array.isArray(experience_start_date) || !Array.isArray(experience_end_date) || !Array.isArray(description) || !Array.isArray(project_name) || !Array.isArray(github_link)) {
+      throw new Error('Invalid form data');
+    }
+
     connection.beginTransaction(async (err) => {
       if (err) {
         console.error('Error starting transaction:', err);
@@ -1347,9 +1512,21 @@ router.post('/edit_resume/:id', async (req, res) => {
         const parsedSkills = parseSkills(skills || '');
         const skillsString = parsedSkills.map(skill => `${skill.skill_name}:${skill.proficiency_level}`).join(', ');
 
+        // Parse experience using the new function
+        const parsedExperience = parseExperienceFromForm(company_name, role, experience_start_date, experience_end_date, description);
+        const experienceString = parsedExperience.map(exp => `${exp.company_name}:${exp.role}:${exp.start_date}:${exp.end_date}:${exp.description}`).join(';;');
+
+        // Parse education using the new function
+        const parsedEducation = parseEducationFromForm(degree, institution, education_start_date, education_end_date);
+        const educationString = parsedEducation.map(edu => `${edu.degree}:${edu.institution}:${edu.start_date}:${edu.end_date}`).join(';;');
+
+        // Parse projects using the new function
+        const parsedProjects = parseProjectsFromForm(project_name, github_link);
+        const projectsString = parsedProjects.map(proj => `${proj.project_name}:${proj.github_link}`).join(';;');
+
         // Update resume data in the database
-        const updateResumeQuery = 'UPDATE resumes SET skills = ?, linkedUrl = ? WHERE id = ?';
-        const resumeValues = [skillsString, linkedUrl, resumeId];
+        const updateResumeQuery = 'UPDATE resumes SET skills = ?, linkedUrl = ?, experience = ?, education = ?, projects = ? WHERE id = ?';
+        const resumeValues = [skillsString, linkedUrl, experienceString, educationString, projectsString, resumeId];
 
         await new Promise((resolve, reject) => {
           connection.query(updateResumeQuery, resumeValues, (err) => {
@@ -1361,82 +1538,14 @@ router.post('/edit_resume/:id', async (req, res) => {
           });
         });
 
-        // Update or insert skills
-        const updateSkillsQuery = 'REPLACE INTO Skills (user_id, skill_name, proficiency_level) VALUES (?, ?, ?)';
-        for (const skill of parsedSkills) {
-          await new Promise((resolve, reject) => {
-            connection.query(updateSkillsQuery, [user.id, skill.skill_name, skill.proficiency_level], (err) => {
-              if (err) {
-                console.error('Error updating skills:', err);
-                return reject(err);
-              }
-              resolve();
-            });
-          });
-        }
-
-        // Update or insert experience
-        if (experience) {
-          const parsedExperience = parseExperience(experience);
-          const updateExperienceQuery = 'REPLACE INTO Experience (user_id, company_name, role, start_date, end_date, description) VALUES (?, ?, ?, ?, ?, ?)';
-          for (const exp of parsedExperience) {
-            await new Promise((resolve, reject) => {
-              connection.query(updateExperienceQuery, [user.id, exp.company_name, exp.role, exp.start_date, exp.end_date, exp.description], (err) => {
-                if (err) {
-                  console.error('Error updating experience:', err);
-                  return reject(err);
-                }
-                resolve();
-              });
-            });
-          }
-        }
-
-        // Update or insert projects
-        if (projects) {
-          const parsedProjects = parseProjects(projects);
-          const updateProjectsQuery = 'REPLACE INTO Projects (user_id, project_name, github_link) VALUES (?, ?, ?)';
-          for (const project of parsedProjects) {
-            await new Promise((resolve, reject) => {
-              connection.query(updateProjectsQuery, [user.id, project.project_name, project.github_link], (err) => {
-                if (err) {
-                  console.error('Error updating projects:', err);
-                  return reject(err);
-                }
-                resolve();
-              });
-            });
-          }
-        }
-
-        // Update or insert certificates
-      if (certificates) {
-        const parsedCertificates = parseCertificates(certificates);
-        const updateCertificatesQuery = 'REPLACE INTO Certificates (user_id, certificate_name, issuing_organization, issue_date, expiration_date) VALUES (?, ?, ?, ?, ?)';
-        for (const cert of parsedCertificates) {
-          await new Promise((resolve, reject) => {
-            connection.query(updateCertificatesQuery, [user.id, cert.certificate_name, cert.issuing_organization, cert.issue_date, cert.expiration_date], (err) => {
-              if (err) {
-                console.error('Error updating certificates:', err);
-                return reject(err);
-              }
-              resolve();
-            });
-          });
-        }
-        }
-
         // Fetch updated resume data
         const query = `
           SELECT resumes.*, 
-                GROUP_CONCAT(DISTINCT CONCAT_WS(':', e.degree, e.institution, DATE_FORMAT(e.start_date, '%Y-%m-%d'), DATE_FORMAT(e.end_date, '%Y-%m-%d')) ORDER BY e.start_date SEPARATOR ';;') AS education,
-                GROUP_CONCAT(DISTINCT CONCAT_WS(':', p.project_name, p.github_link) ORDER BY p.project_name SEPARATOR ';;') AS projects,
-                GROUP_CONCAT(DISTINCT CONCAT_WS(':', exp.company_name, exp.role, DATE_FORMAT(exp.start_date, '%Y-%m-%d'), DATE_FORMAT(exp.end_date, '%Y-%m-%d'), exp.description) ORDER BY exp.start_date SEPARATOR ';;') AS experience,
+                resumes.education,
+                resumes.projects,
+                resumes.experience,
                 GROUP_CONCAT(DISTINCT CONCAT_WS(':', c.certificate_name, c.issuing_organization, DATE_FORMAT(c.issue_date, '%Y-%m-%d'), DATE_FORMAT(c.expiration_date, '%Y-%m-%d')) ORDER BY c.issue_date SEPARATOR ';;') AS certificates
           FROM resumes
-          LEFT JOIN Education e ON resumes.user_id = e.user_id
-          LEFT JOIN Projects p ON resumes.user_id = p.user_id
-          LEFT JOIN Experience exp ON resumes.user_id = exp.user_id
           LEFT JOIN Certificates c ON resumes.user_id = c.user_id
           WHERE resumes.id = ? AND resumes.user_id = ?
           GROUP BY resumes.id
@@ -1459,10 +1568,7 @@ router.post('/edit_resume/:id', async (req, res) => {
           }) : [];
 
           resume.projects = resume.projects ? resume.projects.split(';;').map(proj => {
-            let [project_name, github_link] = proj.split(':');
-            if (github_link && !github_link.startsWith('http://') && !github_link.startsWith('https://')) {
-              github_link = 'https://' + github_link; // Default to https
-            }
+            const [project_name, github_link] = proj.split(':');
             return { project_name, github_link };
           }) : [];
 
@@ -1475,6 +1581,19 @@ router.post('/edit_resume/:id', async (req, res) => {
             const [certificate_name, issuing_organization, issue_date, expiration_date] = cert.split(':');
             return { certificate_name, issuing_organization, issue_date, expiration_date };
           }) : [];
+
+          console.log({
+            firstName,
+            lastName,
+            email,
+            phone,
+            linkedUrl,
+            skills: parsedSkills,
+            education: resume.education,
+            experience: resume.experience,
+            certificates: resume.certificates,
+            projects: resume.projects
+          });
 
           // Render the resume to HTML for the web view
           ejs.renderFile(path.join(__dirname, 'views', 'update_generated_resume.ejs'), {
@@ -1589,26 +1708,107 @@ router.post('/edit_resume/:id', async (req, res) => {
     console.error('Error updating resume:', error);
     res.status(500).send('Error updating resume');
   }
-  });
+});
 
-
-
-
+                
 
 
 // Handle resume deletion
 router.post('/delete_resume/:id', (req, res) => {
   const resumeId = req.params.id;
+  const userId = req.session.user.id;
 
   const query = 'DELETE FROM resumes WHERE id = ? AND user_id = ?';
-  connection.query(query, [resumeId, req.session.user.id], (error) => {
+  connection.query(query, [resumeId, userId], (error) => {
     if (error) {
       console.error('Error deleting resume:', error);
       return res.status(500).send('Error deleting resume');
     }
 
-    // Render a confirmation page after deletion
-    res.render('resume_deleted'); // You can change this view name as needed
+    // Optionally, delete the associated resume file from S3
+    const getS3UrlQuery = 'SELECT s3_url FROM resumes WHERE id = ? AND user_id = ?';
+    connection.query(getS3UrlQuery, [resumeId, userId], (error, results) => {
+      if (error) {
+        console.error('Error fetching S3 URL:', error);
+        return res.status(500).send('Error fetching S3 URL');
+      }
+
+      if (results.length > 0) {
+        const s3Url = results[0].s3_url;
+        const s3Key = s3Url.split('/').slice(-1)[0];
+
+        const deleteParams = {
+          Bucket: 'resume-generator-ocu',
+          Key: s3Key
+        };
+
+        s3.deleteObject(deleteParams, (s3Err) => {
+          if (s3Err) {
+            console.error('Error deleting S3 object:', s3Err);
+            return res.status(500).send('Error deleting S3 object');
+          }
+
+          // Render a confirmation page after deletion
+          res.render('resume_deleted'); // You can change this view name as needed
+        });
+      } else {
+        // Render a confirmation page after deletion if no S3 URL is found
+        res.render('resume_deleted'); // You can change this view name as needed
+      }
+    });
+  });
+});
+
+router.delete('/resume/:email', (req, res) => {
+  const email = req.params.email;
+
+  // First, fetch the resume to get the user ID and S3 URL
+  const getResumeQuery = 'SELECT * FROM resumes WHERE email = ?';
+  connection.query(getResumeQuery, [email], (error, results) => {
+    if (error) {
+      console.error('Error querying the database:', error);
+      return res.status(500).send('Error querying the database');
+    }
+
+    if (results.length === 0) {
+      return res.status(404).send('No resume found for the given email');
+    }
+
+    const resume = results[0];
+    const resumeId = resume.id;
+    const userId = resume.user_id;
+    const s3Url = resume.s3_url;
+
+    // Delete the resume from the database
+    const deleteResumeQuery = 'DELETE FROM resumes WHERE id = ? AND user_id = ?';
+    connection.query(deleteResumeQuery, [resumeId, userId], (error) => {
+      if (error) {
+        console.error('Error deleting resume:', error);
+        return res.status(500).send('Error deleting resume');
+      }
+
+      // Optionally, delete the associated resume file from S3 if it exists
+      if (s3Url) {
+        const s3Key = s3Url.split('/').slice(-1)[0];
+        const deleteParams = {
+          Bucket: 'resume-generator-ocu',
+          Key: s3Key
+        };
+
+        s3.deleteObject(deleteParams, (s3Err) => {
+          if (s3Err) {
+            console.error('Error deleting S3 object:', s3Err);
+            return res.status(500).send('Error deleting S3 object');
+          }
+
+          // Render a confirmation page after deletion
+          res.render('resume_deleted'); // You can change this view name as needed
+        });
+      } else {
+        // Render a confirmation page after deletion if no S3 URL is found
+        res.render('resume_deleted'); // You can change this view name as needed
+      }
+    });
   });
 });
 
