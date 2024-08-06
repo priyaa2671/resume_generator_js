@@ -678,6 +678,109 @@ router.get('/user/:email/education', (req, res) => {
   });
 });
 
+// DELETE /user/:email/education/:id
+router.delete('/user/:email/education/:id', (req, res) => {
+  const email = req.params.email;
+  const education_id = req.params.id;
+
+  const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+  connection.query(getUserIdQuery, [email], (error, results) => {
+      if (error) {
+          console.error('Error querying the database:', error);
+          return res.status(500).send('Error querying the database');
+      }
+
+      if (results.length === 0) {
+          return res.status(404).send('User not found');
+      }
+
+      const user_id = results[0].id;
+      const deleteEducationQuery = 'DELETE FROM Education WHERE user_id = ? AND id = ?';
+
+      connection.query(deleteEducationQuery, [user_id, education_id], (error, results) => {
+          if (error) {
+              console.error('Error deleting education:', error);
+              return res.status(500).send('Error deleting education');
+          }
+          res.status(200).send('Education deleted successfully');
+      });
+  });
+});
+
+// POST /user/:email/education
+router.post('/user/:email/education', (req, res) => {
+  const email = req.params.email;
+  const { degree, institution, start_date, end_date } = req.body;
+
+  console.log('Received data:', { degree, institution, start_date, end_date });
+
+  if (!degree || !institution || !start_date || !end_date) {
+      return res.status(400).send('All fields are required');
+  }
+
+  const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+  connection.query(getUserIdQuery, [email], (error, results) => {
+      if (error) {
+          console.error('Error querying the database:', error);
+          return res.status(500).send('Error querying the database');
+      }
+
+      if (results.length === 0) {
+          return res.status(404).send('User not found');
+      }
+
+      const user_id = results[0].id;
+      const insertEducationQuery = 'INSERT INTO Education (user_id, degree, institution, start_date, end_date, email) VALUES (?, ?, ?, ?, ?, ?)';
+      const values = [user_id, degree, institution, start_date, end_date, email];
+
+      connection.query(insertEducationQuery, values, (error, results) => {
+          if (error) {
+              console.error('Error inserting education:', error);
+              return res.status(500).send('Error inserting education');
+          }
+          console.log('Education added successfully:', results);
+          res.status(201).send('Education added successfully');
+      });
+  });
+});
+
+// PUT /user/:email/education/:id
+router.put('/user/:email/education/:id', (req, res) => {
+  const email = req.params.email;
+  const education_id = req.params.id;
+  const { degree, institution, start_date, end_date } = req.body;
+
+  console.log('Received data:', { degree, institution, start_date, end_date });
+
+  if (!degree || !institution || !start_date || !end_date) {
+      return res.status(400).send('All fields are required');
+  }
+
+  const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+  connection.query(getUserIdQuery, [email], (error, results) => {
+      if (error) {
+          console.error('Error querying the database:', error);
+          return res.status(500).send('Error querying the database');
+      }
+
+      if (results.length === 0) {
+          return res.status(404).send('User not found');
+      }
+
+      const user_id = results[0].id;
+      const updateEducationQuery = 'UPDATE Education SET degree = ?, institution = ?, start_date = ?, end_date = ? WHERE user_id = ? AND id = ?';
+      const values = [degree, institution, start_date, end_date, user_id, education_id];
+
+      connection.query(updateEducationQuery, values, (error, results) => {
+          if (error) {
+              console.error('Error updating education:', error);
+              return res.status(500).send('Error updating education');
+          }
+          res.status(200).send('Education updated successfully');
+      });
+  });
+});
+
 
 router.get('/user/:email/experience', (req, res) => {
   const email = req.params.email;
@@ -715,6 +818,107 @@ router.get('/user/:email/experience', (req, res) => {
       res.json(results);
     });
   });
+
+  router.delete('/user/:email/skills/:id', (req, res) => {
+    const email = req.params.email;
+    const skill_id = req.params.id;
+
+    const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+    connection.query(getUserIdQuery, [email], (error, results) => {
+        if (error) {
+            console.error('Error querying the database:', error);
+            return res.status(500).send('Error querying the database');
+        }
+
+        if (results.length === 0) {
+            return res.status(404).send('User not found');
+        }
+
+        const user_id = results[0].id;
+        const deleteSkillQuery = 'DELETE FROM Skills WHERE user_id = ? AND id = ?';
+
+        connection.query(deleteSkillQuery, [user_id, skill_id], (error, results) => {
+            if (error) {
+                console.error('Error deleting skill:', error);
+                return res.status(500).send('Error deleting skill');
+            }
+            res.status(200).send('Skill deleted successfully');
+        });
+    });
+});
+
+router.post('/user/:email/skills', (req, res) => {
+  const email = req.params.email;
+  const { skill_name, proficiency_level } = req.body;
+
+  console.log('Received data:', { skill_name, proficiency_level });
+
+  if (!skill_name || !proficiency_level) {
+      return res.status(400).send('All fields are required');
+  }
+
+  const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+  connection.query(getUserIdQuery, [email], (error, results) => {
+      if (error) {
+          console.error('Error querying the database:', error);
+          return res.status(500).send('Error querying the database');
+      }
+
+      if (results.length === 0) {
+          return res.status(404).send('User not found');
+      }
+
+      const user_id = results[0].id;
+      const insertSkillQuery = 'INSERT INTO Skills (user_id, skill_name, proficiency_level, email) VALUES (?, ?, ?, ?)';
+      const values = [user_id, skill_name, proficiency_level, email];
+
+      connection.query(insertSkillQuery, values, (error, results) => {
+          if (error) {
+              console.error('Error inserting skill:', error);
+              return res.status(500).send('Error inserting skill');
+          }
+          console.log('Skill added successfully:', results);
+          res.status(201).send('Skill added successfully');
+      });
+  });
+});
+
+
+router.put('/user/:email/skills/:id', (req, res) => {
+  const email = req.params.email;
+  const skill_id = req.params.id;
+  const { skill_name, proficiency_level } = req.body;
+
+  console.log('Received data:', { skill_name, proficiency_level });
+
+  if (!skill_name || !proficiency_level) {
+      return res.status(400).send('All fields are required');
+  }
+
+  const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
+  connection.query(getUserIdQuery, [email], (error, results) => {
+      if (error) {
+          console.error('Error querying the database:', error);
+          return res.status(500).send('Error querying the database');
+      }
+
+      if (results.length === 0) {
+          return res.status(404).send('User not found');
+      }
+
+      const user_id = results[0].id;
+      const updateSkillQuery = 'UPDATE Skills SET skill_name = ?, proficiency_level = ?, email = ? WHERE user_id = ? AND id = ?';
+      const values = [skill_name, proficiency_level, email, user_id, skill_id];
+
+      connection.query(updateSkillQuery, values, (error, results) => {
+          if (error) {
+              console.error('Error updating skill:', error);
+              return res.status(500).send('Error updating skill');
+          }
+          res.status(200).send('Skill updated successfully');
+      });
+  });
+});
 
   router.get('/user/:email/phone', (req, res) => {
     const email = req.params.email;
@@ -1173,144 +1377,6 @@ router.put('/user/:email/experience/:id', (req, res) => {
     });
   });
   
-  // Routes for fetching certificates
-router.get('/user/:email/certificates', (req, res) => {
-    const email = req.params.email;
-    const query = 'SELECT certificate_name, issuing_organization, DATE_FORMAT(issue_date, "%Y-%m-%d") AS issue_date, DATE_FORMAT(expiration_date, "%Y-%m-%d") AS expiration_date FROM Certificates c JOIN users u ON c.user_id = u.id WHERE u.email = ?';
-  
-    connection.query(query, [email], (error, results) => {
-      if (error) {
-        console.error('Error querying the database:', error);
-        return res.status(500).send('Error querying the database');
-      }
-  
-      if (results.length === 0) {
-        return res.status(404).send('No certificates found for the given email');
-      }
-  
-      res.json(results);
-    });
-  });
-
-  router.get('/user/:email/projects', (req, res) => {
-    const email = req.params.email;
-    const query = 'SELECT p.project_name, p.github_link FROM Projects p JOIN users u ON p.user_id = u.id WHERE u.email = ?';
-    
-    connection.query(query, [email], (error, results) => {
-      if (error) {
-        console.error('Error querying the database:', error);
-        return res.status(500).send('Error querying the database');
-      }
-  
-      if (results.length === 0) {
-        return res.status(404).send('No projects found for the given email');
-      }
-  
-      res.json(results);
-    });
-  });
-
-  router.post('/user/:email/projects', (req, res) => {
-    const email = req.params.email;
-    const { project_name, github_link } = req.body;
-
-    console.log('Received data:', { project_name, github_link });
-
-    if (!project_name || !github_link) {
-        return res.status(400).send('All fields are required');
-    }
-
-    const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
-    connection.query(getUserIdQuery, [email], (error, results) => {
-        if (error) {
-            console.error('Error querying the database:', error);
-            return res.status(500).send('Error querying the database');
-        }
-
-        if (results.length === 0) {
-            return res.status(404).send('User not found');
-        }
-
-        const user_id = results[0].id;
-        const insertProjectQuery = 'INSERT INTO Projects (user_id, project_name, github_link) VALUES (?, ?, ?)';
-        const values = [user_id, project_name, github_link];
-
-        connection.query(insertProjectQuery, values, (error, results) => {
-            if (error) {
-                console.error('Error inserting project:', error);
-                return res.status(500).send('Error inserting project');
-            }
-            console.log('Project added successfully:', results);
-            res.status(201).send('Project added successfully');
-        });
-    });
-});
-
-
-router.put('/user/:email/projects/:id', (req, res) => {
-  const email = req.params.email;
-  const project_id = req.params.id;
-  const { project_name, github_link } = req.body;
-
-  console.log('Received data:', { project_name, github_link });
-
-  if (!project_name || !github_link) {
-      return res.status(400).send('All fields are required');
-  }
-
-  const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
-  connection.query(getUserIdQuery, [email], (error, results) => {
-      if (error) {
-          console.error('Error querying the database:', error);
-          return res.status(500).send('Error querying the database');
-      }
-
-      if (results.length === 0) {
-          return res.status(404).send('User not found');
-      }
-
-      const user_id = results[0].id;
-      const updateProjectQuery = 'UPDATE Projects SET project_name = ?, github_link = ? WHERE user_id = ? AND id = ?';
-      const values = [project_name, github_link, user_id, project_id];
-
-      connection.query(updateProjectQuery, values, (error, results) => {
-          if (error) {
-              console.error('Error updating project:', error);
-              return res.status(500).send('Error updating project');
-          }
-          res.status(200).send('Project updated successfully');
-      });
-  });
-});
-
-
-router.delete('/user/:email/projects/:id', (req, res) => {
-  const email = req.params.email;
-  const project_id = req.params.id;
-
-  const getUserIdQuery = 'SELECT id FROM users WHERE email = ?';
-  connection.query(getUserIdQuery, [email], (error, results) => {
-      if (error) {
-          console.error('Error querying the database:', error);
-          return res.status(500).send('Error querying the database');
-      }
-
-      if (results.length === 0) {
-          return res.status(404).send('User not found');
-      }
-
-      const user_id = results[0].id;
-      const deleteProjectQuery = 'DELETE FROM Projects WHERE user_id = ? AND id = ?';
-
-      connection.query(deleteProjectQuery, [user_id, project_id], (error, results) => {
-          if (error) {
-              console.error('Error deleting project:', error);
-              return res.status(500).send('Error deleting project');
-          }
-          res.status(200).send('Project deleted successfully');
-      });
-  });
-});
 
 
   router.get('/user/:email/projects/names', (req, res) => {
@@ -1331,41 +1397,6 @@ router.delete('/user/:email/projects/:id', (req, res) => {
     });
   });
   
-  router.get('/user/:email/projects/github_links', (req, res) => {
-    const email = req.params.email;
-    const query = 'SELECT p.github_link FROM Projects p JOIN users u ON p.user_id = u.id WHERE u.email = ?';
-  
-    connection.query(query, [email], (error, results) => {
-      if (error) {
-        console.error('Error querying the database:', error);
-        return res.status(500).send('Error querying the database');
-      }
-  
-      if (results.length === 0) {
-        return res.status(404).send('No GitHub links found for the given email');
-      }
-  
-      res.json(results.map(row => row.github_link));
-    });
-  });
-  
-  router.get('/user/:email/projects/:project_name', (req, res) => {
-    const { email, project_name } = req.params;
-    const query = 'SELECT p.project_name, p.github_link FROM Projects p JOIN users u ON p.user_id = u.id WHERE u.email = ? AND p.project_name = ?';
-  
-    connection.query(query, [email, project_name], (error, results) => {
-      if (error) {
-        console.error('Error querying the database:', error);
-        return res.status(500).send('Error querying the database');
-      }
-  
-      if (results.length === 0) {
-        return res.status(404).send('No details found for the given project');
-      }
-  
-      res.json(results[0]);
-    });
-  });
 
 // Show edit resume form
 router.get('/edit_resume/:id', (req, res) => {
@@ -1759,6 +1790,4 @@ router.post('/delete_resume/:id', (req, res) => {
 });
 
 
-
-  
   module.exports = router;
